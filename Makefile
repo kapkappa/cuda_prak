@@ -1,13 +1,13 @@
 CFLAGS	:=	-O3 -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize
 FLAGS	:=	-arch native $(addprefix -Xcompiler ,$(CFLAGS))
 
-all: clean cpu gpu
+all: clean gpu
 
 cpu:
-	g++ $(CFLAGS) jac3d.cpp -o prog_cpu
+	gcc $(CFLAGS) jac3d.c -o prog_orig
 
 gpu:
-	nvcc $(FLAGS)  jac3d.cu -o prog_gpu
+	nvcc $(FLAGS)  jac3d.cu -o prog
 
 clean:
-	rm -f prog_cpu prog_gpu
+	rm -f prog prog_orig

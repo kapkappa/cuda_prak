@@ -1,5 +1,4 @@
-logs
-prog_cpu
-prog_gpu
+log*
+prog*
 a.out
 *.o

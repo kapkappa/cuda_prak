@@ -8,10 +8,14 @@
 #include <thrust/extrema.h>
 #include <thrust/device_ptr.h>
 
-
 #define Max(a, b) ((a) > (b) ? (a) : (b))
 
-#define MAXEPS 0.5f
+#define MAXEPS 0.5
+
+#define X_BLOCKSIZE 8
+#define Y_BLOCKSIZE 8
+#define Z_BLOCKSIZE 8
+#define TOTAL_BLOCKSIZE (X_BLOCKSIZE * Y_BLOCKSIZE * Z_BLOCKSIZE)
 
 #define CHECK_CUDA(func)                                                       \
 {                                                                              \
@@ -28,6 +32,10 @@ static inline double timer() {
     struct timezone tzp;
     gettimeofday(&tp, &tzp);
     return((double)tp.tv_sec + (double)tp.tv_usec * 1.e-06);
+}
+
+static inline size_t get_index(size_t i, size_t j, size_t k, size_t size) {
+    return i * size * size + j * size + k;
 }
 
 template <uint32_t BLOCKSIZE>
@@ -85,13 +93,45 @@ __global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, do
     B[id] = (A[id - offset_x] + A[id - offset_y] + A[id - offset_z] + A[id + offset_x] + A[id + offset_y] + A[id + offset_z]) / 6.0;
 }
 
+double solve(double *A, double *B, size_t size) {
+    size_t NX = size, NY = size, NZ = size;
+    double eps = 0.0;
 
+    for (size_t i = 1; i < NX-1; i++) {
+        for (size_t j = 1; j < NY-1; j++) {
+            for (size_t k = 1; k < NZ-1; k++) {
+                size_t idx = get_index(i, j, k, size);
+                double tmp = fabs(B[idx] - A[idx]);
+                eps = Max(tmp, eps);
+                A[idx] = B[idx];
+            }
+        }
+    }
+
+    size_t offset_i = NZ * NY;
+    size_t offset_j = NZ;
+    size_t offset_k = 1;
+
+    for (size_t i = 1; i < NX-1; i++) {
+        for (size_t j = 1; j < NY-1; j++) {
+            for (size_t k = 1; k < NZ-1; k++) {
+                size_t idx = get_index(i, j, k, size);
+                B[idx] = (A[idx - offset_i] + A[idx - offset_j] + A[idx - offset_k] +
+                          A[idx + offset_i] + A[idx + offset_j] + A[idx + offset_k]) / 6.0;
+            }
+        }
+    }
+
+    return eps;
+}
 
 int main(int argc, char **argv) {
 
     int argc_indx = 0;
     int iters = 100;
     size_t size = 30;
+    std::string driver = "CPU";
+    enum class driver_t {CPU, GPU} drv = driver_t::CPU;
     while (argc_indx < argc) {
         if (!strcmp(argv[argc_indx], "-size")) {
             argc_indx++;
@@ -99,6 +139,17 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[argc_indx], "-iters")) {
             argc_indx++;
             iters = atoi(argv[argc_indx]);
+        } else if (!strcmp(argv[argc_indx], "-driver")) {
+            argc_indx++;
+            if (!strcmp(argv[argc_indx], "GPU")) {
+                drv = driver_t::GPU;
+                driver = "GPU";
+            } else if (!strcmp(argv[argc_indx], "CPU")) {
+                drv = driver_t::CPU;
+                driver = "CPU";
+            } else {
+                printf("Wrong driver! Set to CPU.\n");
+            }
         } else if (!strcmp(argv[argc_indx], "-help")) {
             printf("Usage: ./prog_gpu -size L -iters N\n");
             return 0;
@@ -118,11 +169,12 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < NX; i++) {
         for (size_t j = 0; j < NY; j++) {
             for (size_t k = 0; k < NZ; k++) {
-                h_A[i * NY * NZ + j * NZ + k] = 0;
+                size_t idx = get_index(i, j, k, size);
+                h_A[idx] = 0;
                 if (i == 0 || j == 0 || k == 0 || i == NX-1 || j == NY-1 || k == NZ-1) {
-                    h_B[i * NY * NZ + j * NZ + k] = 0.0;
+                    h_B[idx] = 0.0;
                 } else {
-                    h_B[i * NY * NZ + j * NZ + k] = 4.0 + i + j + k;
+                    h_B[idx] = 4.0 + i + j + k;
                 }
             }
         }
@@ -135,7 +187,7 @@ int main(int argc, char **argv) {
     CHECK_CUDA( cudaMemcpy(d_A, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
     CHECK_CUDA( cudaMemcpy(d_B, h_B, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
 
-    dim3 threads_per_block = dim3(8, 8, 8);
+    dim3 threads_per_block = dim3(X_BLOCKSIZE, Y_BLOCKSIZE, Z_BLOCKSIZE);
     dim3 blocks_per_grid = dim3((size-1) / threads_per_block.x + 1,
                                 (size-1) / threads_per_block.y + 1,
                                 (size-1) / threads_per_block.z + 1);
@@ -149,20 +201,17 @@ int main(int argc, char **argv) {
     double t1 = timer();
 
     for (int it = 1; it <= iters; it++) {
-        eps = 0.0;
 
-        jacobi<512><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+        if (drv == driver_t::GPU) {
 
-/*
-        cudaMemcpy(eps_host, eps_out, sizeof(double) * grid_size, cudaMemcpyDeviceToHost);
-        for (uint32_t i = 0; i < grid_size; i++) {
-            eps = Max(eps, eps_host[i]);
-            eps_host[i] = 0.0;
+            jacobi<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+
+            thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
+            eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));
+
+        } else {
+            eps = solve(h_A, h_B, size);
         }
-        cudaMemcpy(eps_out, eps_host, sizeof(double) * grid_size, cudaMemcpyHostToDevice);
-*/
-        thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
-        eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));
 
         printf(" IT = %4i   EPS = %14.12E\n", it, eps);
         if (eps < MAXEPS)
@@ -174,17 +223,17 @@ int main(int argc, char **argv) {
     free(h_A);
     free(h_B);
 
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(eps_out);
+    CHECK_CUDA( cudaFree(d_A) )
+    CHECK_CUDA( cudaFree(d_B) )
+    CHECK_CUDA( cudaFree(eps_out) )
 
     printf(" Jacobi3D Benchmark Completed.\n");
     printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
     printf(" Iterations      =       %12d\n", iters);
     printf(" Time in seconds =       %12.6lf\n", t2 - t1);
     printf(" Operation type  =     floating point\n");
+    printf(" Driver          = %s\n", driver.c_str());
 //    printf(" Verification    =       %12s\n", (fabs(eps - 5.058044) < 1e-11 ? "SUCCESSFUL" : "UNSUCCESSFUL"));
-
     printf(" END OF Jacobi3D Benchmark\n");
     return 0;
 }
