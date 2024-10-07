@@ -72,6 +72,16 @@ __device__ __forceinline__ void block_reduce_max(size_t i, double* data) {
 }
 
 template <uint32_t BLOCKSIZE>
+__device__ __forceinline__ void warp_reduce(size_t i, volatile double* data) {
+    if (BLOCKSIZE >= 64) data[i] = Max(data[i], data[i + 32]);
+    if (BLOCKSIZE >= 32) data[i] = Max(data[i], data[i + 16]);
+    if (BLOCKSIZE >= 16) data[i] = Max(data[i], data[i +  8]);
+    if (BLOCKSIZE >=  8) data[i] = Max(data[i], data[i +  4]);
+    if (BLOCKSIZE >=  4) data[i] = Max(data[i], data[i +  2]);
+    if (BLOCKSIZE >=  2) data[i] = Max(data[i], data[i +  1]);
+}
+
+template <uint32_t BLOCKSIZE>
 __global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
     const size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
@@ -136,7 +146,14 @@ __global__ void get_eps(const double * __restrict__ A, const double * __restrict
 
     __syncthreads();
 
-    block_reduce_max<BLOCKSIZE>(thread_id, shared_eps);
+//    block_reduce_max<BLOCKSIZE>(thread_id, shared_eps);
+
+//  Unroll reduction a little
+    if (BLOCKSIZE >= 512) { if (thread_id < 256) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 256]); } __syncthreads(); }
+    if (BLOCKSIZE >= 256) { if (thread_id < 128) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 128]); } __syncthreads(); }
+    if (BLOCKSIZE >= 128) { if (thread_id <  64) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id +  64]); } __syncthreads(); }
+
+    if (thread_id < 32) warp_reduce<BLOCKSIZE>(thread_id, shared_eps);
 
     if (thread_id == 0) {
         eps_out[block_id] = shared_eps[0];
@@ -170,7 +187,7 @@ __global__ void update(const double * __restrict__ A, double *B, size_t NX, size
 /////////////////////////////////////////////////////////////////////
 
 
-double solve(double *A, double *B, size_t size) {
+double jac3d(double *A, double *B, size_t size) {
     size_t NX = size, NY = size, NZ = size;
     double eps = 0.0;
 
@@ -202,12 +219,14 @@ double solve(double *A, double *B, size_t size) {
     return eps;
 }
 
+
 int main(int argc, char **argv) {
 
     int argc_indx = 0;
     int iters = 100;
     size_t size = 30;
     std::string driver = "CPU";
+    bool verification = false;
     enum class driver_t {CPU, GPU} drv = driver_t::CPU;
     while (argc_indx < argc) {
         if (!strcmp(argv[argc_indx], "-size")) {
@@ -228,8 +247,11 @@ int main(int argc, char **argv) {
                 printf("Wrong driver! Set to CPU.\n");
             }
         } else if (!strcmp(argv[argc_indx], "-help")) {
-            printf("Usage: ./prog_gpu -size L -iters N\n");
+            printf("Usage: ./prog_gpu -size L -iters N -driver [CPU|GPU] [-verification]\n");
             return 0;
+        } else if (!strcmp(argv[argc_indx], "-verification")) {
+            argc_indx++;
+            verification = true;
         } else {
             argc_indx++;
         }
@@ -240,7 +262,7 @@ int main(int argc, char **argv) {
     double *h_A, *h_B;
 
     if ((h_A = (double*)malloc(sizeof(double) * NX * NY * NZ)) == NULL) { perror("matrix host_A allocation failed"); exit(1); }
-    if ((h_B = (double*)malloc(sizeof(double) * NX * NY * NZ)) == NULL) { perror("matrix host_B allocation failed"); exit(1); }
+    if ((h_B = (double*)malloc(sizeof(double) * NX * NY * NZ)) == NULL) { perror("matrix host_B allocation failed"); exit(2); }
 
     // Init
     for (size_t i = 0; i < NX; i++) {
@@ -269,43 +291,38 @@ int main(int argc, char **argv) {
                                 (size-1) / threads_per_block.y + 1,
                                 (size-1) / threads_per_block.z + 1);
 
-//    constexpr int block_size = threads_per_block.x * threads_per_block.y * threads_per_block.z;
     uint32_t grid_size = blocks_per_grid.x * blocks_per_grid.y * blocks_per_grid.z;
 
     double eps = 0.0, *eps_out;
-    cudaMalloc(&eps_out, sizeof(double) * grid_size);
+    CHECK_CUDA( cudaMalloc(&eps_out, sizeof(double) * grid_size) )
+
+    int it;
 
     double t1 = timer();
 
-    for (int it = 1; it <= iters; it++) {
+    for (it = 1; it <= iters; it++) {
         if (drv == driver_t::GPU) {
 //            jacobi<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
             get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
 
             thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
-            eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));
+            eps = *(thrust::max_element(thrust::device, eps_ptr, eps_ptr + grid_size));
 
             CHECK_CUDA( cudaMemcpy(d_A, d_B, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToDevice) )
 
             update<<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ);
 
         } else {
-            eps = solve(h_A, h_B, size);
+            eps = jac3d(h_A, h_B, size);
         }
 
-        printf(" IT = %4i   EPS = %14.12E\n", it, eps);
-        if (eps < MAXEPS)
-            break;
+        if (verification) { printf(" IT = %4i   EPS = %14.12E\n", it, eps); }
+        if (eps < MAXEPS) { break; }
     }
 
     double t2 = timer();
 
-/*
-    if (drv == driver_t::GPU) {
-        CHECK_CUDA( cudaMemcpy(h_A, d_A, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToHost) )
-    }
-    std::cout << "Matrix A sum: " << get_matrix_sum(h_A, size) << std::endl;
-*/
+    printf(" total ITs = %4i    Final EPS = %14.12E\n", it, eps);
 
     free(h_A);
     free(h_B);
@@ -320,7 +337,7 @@ int main(int argc, char **argv) {
     printf(" Time in seconds =       %12.6lf\n", t2 - t1);
     printf(" Operation type  =     floating point\n");
     printf(" Driver          = %s\n", driver.c_str());
-//    printf(" Verification    =       %12s\n", (fabs(eps - 5.058044) < 1e-11 ? "SUCCESSFUL" : "UNSUCCESSFUL"));
+    printf(" Verification    =       %12s\n", "DISABLED");
     printf(" END OF Jacobi3D Benchmark\n");
     return 0;
 }

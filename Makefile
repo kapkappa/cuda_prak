@@ -1,5 +1,5 @@
 CFLAGS	:=	-O3 -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize
-FLAGS	:=	-arch native $(addprefix -Xcompiler ,$(CFLAGS))
+FLAGS	:=	-arch native $(addprefix -Xcompiler ,$(CFLAGS)) #-Xptxas -dlcm=cg
 
 all: clean gpu
 
