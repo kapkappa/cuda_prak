@@ -11,8 +11,6 @@
 
 #define Max(a, b) ((a) > (b) ? (a) : (b))
 
-#define L 384
-#define ITMAX 100
 #define MAXEPS 0.5f
 
 static inline double timer() {
@@ -38,20 +36,27 @@ __device__ __forceinline__ void block_reduce_max(size_t i, double* data) {
 
 template <uint32_t BLOCKSIZE>
 __global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
-    size_t idz = blockIdx.z * blockDim.z + threadIdx.z; // Z-axis thread id
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
+    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
+    const size_t idz = blockIdx.z * blockDim.z + threadIdx.z; // Z-axis thread id
 
-    size_t id = idx + idy * NX + idz * NX * NY;
-    size_t thread_id = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
-    size_t block_id = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
+    const size_t id = idx + idy * NX + idz * NX * NY;
+
+    const size_t thread_id = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;  // thread index in block
+    const size_t block_id = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;         // block index in grid
 
     __shared__ double shared_eps[BLOCKSIZE];    //1-dimensional shared memory
 
-    double eps = 0;
-    double tmp = fabs(B[id] - A[id]);
-    shared_eps[thread_id] = Max(tmp, eps);
-    A[id] = B[id];
+    double tmp = 0.0;
+
+    if (0 < idx && idx < (NX-1) && 0 < idy && idy < (NY-1) && 0 < idz && idz < (NZ-1)) {
+        tmp = fabs(B[id] - A[id]);
+        A[id] = B[id];
+    }
+
+    shared_eps[thread_id] = tmp;
+
+    __syncthreads();
 
     block_reduce_max<BLOCKSIZE>(thread_id, shared_eps);
 
@@ -59,7 +64,7 @@ __global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, do
         eps_out[block_id] = shared_eps[0];
     }
 
-    if (idx == 0 || idx >= NX-1 || idy == 0 || idy >= NY-1 || idz == 0 || idz >= NZ-1) {
+    if (idx == 0 || idx >= (NX-1) || idy == 0 || idy >= (NY-1) || idz == 0 || idz >= (NZ-1)) {
         return;
     }
 
@@ -74,42 +79,51 @@ __global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, do
 
 int main(int argc, char **argv) {
 
-//    size_t size = 0;
-//    if (argc == 2) {
-//        size = atoi(argv[1]);
-//    }
+    int argc_indx = 0;
+    int iters = 100;
+    size_t size = 30;
+    while (argc_indx < argc) {
+        if (!strcmp(argv[argc_indx], "-size")) {
+            argc_indx++;
+            size = atoi(argv[argc_indx]);
+        } else if (!strcmp(argv[argc_indx], "-iters")) {
+            argc_indx++;
+            iters = atoi(argv[argc_indx]);
+        } else if (!strcmp(argv[argc_indx], "-help")) {
+            printf("Usage: ./prog_gpu -size L -iters N\n");
+            return 0;
+        } else {
+            argc_indx++;
+        }
+    }
 
-    size_t size = argc == 2 ? atoi(argv[1]) : 0;
+    size_t NX = size, NY = size, NZ = size;
 
     double *h_A, *h_B;
 
-    h_A = (double*)malloc(sizeof(double) * size * size * size);
-    h_B = (double*)malloc(sizeof(double) * size * size * size);
-
-
-//    double A[L][L][L], B[L][L][L];
-//    double startt, endt;
+    h_A = (double*)malloc(sizeof(double) * NX * NY * NZ);
+    h_B = (double*)malloc(sizeof(double) * NX * NY * NZ);
 
     // Init
-    for (size_t i = 0; i < L; i++) {
-        for (size_t j = 0; j < L; j++) {
-            for (size_t k = 0; k < L; k++) {
-                h_A[i * size * size + j * size + k] = 0;
-                if (i == 0 || j == 0 || k == 0 || i == L - 1 || j == L - 1 || k == L - 1) {
-                    h_B[i * size * size + j * size + k] = 0;
+    for (size_t i = 0; i < NX; i++) {
+        for (size_t j = 0; j < NY; j++) {
+            for (size_t k = 0; k < NZ; k++) {
+                h_A[i * NY * NZ + j * NZ + k] = 0;
+                if (i == 0 || j == 0 || k == 0 || i == NX-1 || j == NY-1 || k == NZ-1) {
+                    h_B[i * NY * NZ + j * NZ + k] = 0.0;
                 } else {
-                    h_B[i * size * size + j * size + k] = 4 + i + j + k;
+                    h_B[i * NY * NZ + j * NZ + k] = 4.0 + i + j + k;
                 }
             }
         }
     }
 
     double *d_A, *d_B;
-    cudaMalloc(&d_A, size * size * size);
-    cudaMalloc(&d_B, size * size * size);
+    cudaMalloc(&d_A, NX * NY * NZ * sizeof(double));
+    cudaMalloc(&d_B, NX * NY * NZ * sizeof(double));
 
-    cudaMemcpy(d_A, h_A, size*size*size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B, size*size*size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_A, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice);
 
     dim3 threads_per_block = dim3(8, 8, 8);
     dim3 blocks_per_grid = dim3((size-1) / threads_per_block.x + 1,
@@ -119,54 +133,45 @@ int main(int argc, char **argv) {
 //    constexpr int block_size = threads_per_block.x * threads_per_block.y * threads_per_block.z;
     uint32_t grid_size = blocks_per_grid.x * blocks_per_grid.y * blocks_per_grid.z;
 
-    double eps, *eps_out;
+    double eps = 0.0, *eps_out;
     cudaMalloc(&eps_out, sizeof(double) * grid_size);
 
     double t1 = timer();
 
-    for (int it = 1; it <= ITMAX; it++) {
-        jacobi<512><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, size, size, size, eps_out);
+    for (int it = 1; it <= iters; it++) {
+        eps = 0.0;
 
+        jacobi<512><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+
+/*
+        cudaMemcpy(eps_host, eps_out, sizeof(double) * grid_size, cudaMemcpyDeviceToHost);
+        for (int i = 0; i < grid_size; i++) {
+            eps = Max(eps, eps_host[i]);
+            eps_host[i] = 0.0;
+        }
+        cudaMemcpy(eps_out, eps_host, sizeof(double) * grid_size, cudaMemcpyHostToDevice);
+*/
         thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
         eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));
 
-        printf(" IT = %4i   EPS = %14.7E\n", it, eps);
+        printf(" IT = %4i   EPS = %14.12E\n", it, eps);
         if (eps < MAXEPS)
             break;
     }
 
     double t2 = timer();
 
-/*
-    for (it = 1; it <= ITMAX; it++)
-    {
-        eps = 0;
+    free(h_A);
+    free(h_B);
 
-        for (i = 1; i < L - 1; i++)
-            for (j = 1; j < L - 1; j++)
-                for (k = 1; k < L - 1; k++)
-                {
-                    double tmp = fabs(B[i][j][k] - A[i][j][k]);
-                    eps = Max(tmp, eps);
-                    A[i][j][k] = B[i][j][k];
-                }
-
-        for (i = 1; i < L - 1; i++)
-            for (j = 1; j < L - 1; j++)
-                for (k = 1; k < L - 1; k++)
-                    B[i][j][k] = (A[i - 1][j][k] + A[i][j - 1][k] + A[i][j][k - 1] + A[i][j][k + 1] + A[i][j + 1][k] + A[i + 1][j][k]) / 6.0f;
-
-        printf(" IT = %4i   EPS = %14.7E\n", it, eps);
-        if (eps < MAXEPS)
-            break;
-    }
-*/
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(eps_out);
 
     printf(" Jacobi3D Benchmark Completed.\n");
-    printf(" Size            = %4d x %4d x %4d\n", L, L, L);
-    printf(" Iterations      =       %12d\n", ITMAX);
-    //TODO
-    printf(" Time in seconds =       %12.2lf\n", t1 - t2);
+    printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
+    printf(" Iterations      =       %12d\n", iters);
+    printf(" Time in seconds =       %12.6lf\n", t2 - t1);
     printf(" Operation type  =     floating point\n");
     printf(" Verification    =       %12s\n", (fabs(eps - 5.058044) < 1e-11 ? "SUCCESSFUL" : "UNSUCCESSFUL"));
 
