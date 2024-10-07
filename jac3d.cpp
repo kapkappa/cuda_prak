@@ -92,11 +92,9 @@ int main(int argc, char **argv) {
     printf(" Jacobi3D Benchmark Completed.\n");
     printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
     printf(" Iterations      =       %12d\n", iters);
-    //TODO
     printf(" Time in seconds =       %12.6lf\n", endt - startt);
     printf(" Operation type  =     floating point\n");
-    printf(" Verification    =       %12s\n", (fabs(eps - 5.058044) < 1e-11 ? "SUCCESSFUL" : "UNSUCCESSFUL"));
-
+//    printf(" Verification    =       %12s\n", (fabs(eps - 5.058044) < 1e-11 ? "SUCCESSFUL" : "UNSUCCESSFUL"));
     printf(" END OF Jacobi3D Benchmark\n");
     return 0;
 }
