@@ -55,7 +55,8 @@ double get_matrix_sum(double *M, size_t size) {
 }
 
 /////////////////////////////////////////////////////////////////////
-
+//  TODO: divide code into two different files: .cpp and .cu
+/////////////////////////////////////////////////////////////////////
 
 
 template <uint32_t BLOCKSIZE>
@@ -300,11 +301,13 @@ int main(int argc, char **argv) {
 
     int it;
 
+    // TODO: Add some warmup iters
+
     double t1 = timer();
 
     for (it = 1; it <= iters; it++) {
         if (drv == driver_t::GPU) {
-//            jacobi<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+//            jacobi<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out); // one big kernel
             get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
 
             thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
