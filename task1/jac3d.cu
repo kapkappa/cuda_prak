@@ -14,7 +14,7 @@
 
 #define X_BLOCKSIZE 8
 #define Y_BLOCKSIZE 8
-#define Z_BLOCKSIZE 8
+#define Z_BLOCKSIZE 2
 #define TOTAL_BLOCKSIZE (X_BLOCKSIZE * Y_BLOCKSIZE * Z_BLOCKSIZE)
 
 #define CHECK_CUDA(func)                                                       \
@@ -34,6 +34,7 @@ static inline double timer() {
     return((double)tp.tv_sec + (double)tp.tv_usec * 1.e-06);
 }
 
+// For square matrices only!
 static inline size_t get_index(size_t i, size_t j, size_t k, size_t size) {
     return i * size * size + j * size + k;
 }
@@ -81,6 +82,7 @@ __device__ __forceinline__ void warp_reduce(size_t i, volatile double* data) {
     if (BLOCKSIZE >=  2) data[i] = Max(data[i], data[i +  1]);
 }
 
+// Doesn't work: race between A[id] and B[id] (presumably)
 template <uint32_t BLOCKSIZE>
 __global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
@@ -153,7 +155,7 @@ __global__ void get_eps(const double * __restrict__ A, const double * __restrict
     if (BLOCKSIZE >= 256) { if (thread_id < 128) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 128]); } __syncthreads(); }
     if (BLOCKSIZE >= 128) { if (thread_id <  64) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id +  64]); } __syncthreads(); }
 
-    if (thread_id < 32) warp_reduce<BLOCKSIZE>(thread_id, shared_eps);
+    if (thread_id < 32) { warp_reduce<BLOCKSIZE>(thread_id, shared_eps); }
 
     if (thread_id == 0) {
         eps_out[block_id] = shared_eps[0];
@@ -336,8 +338,7 @@ int main(int argc, char **argv) {
     printf(" Iterations      =       %12d\n", iters);
     printf(" Time in seconds =       %12.6lf\n", t2 - t1);
     printf(" Operation type  =     floating point\n");
-    printf(" Driver          = %s\n", driver.c_str());
-    printf(" Verification    =       %12s\n", "DISABLED");
+    printf(" Driver          = %18s\n", driver.c_str());
     printf(" END OF Jacobi3D Benchmark\n");
     return 0;
 }
