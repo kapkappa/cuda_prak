@@ -9,12 +9,21 @@
 #include <thrust/device_ptr.h>
 
 #define Max(a, b) ((a) > (b) ? (a) : (b))
+#define Norm(a, b) (sqrt(a*a+b*b))
 
-#define MAXEPS 0.5
+#define MAX_EPS 5E-1
+#define MAX_DIFF 1E-6
 
+#ifndef X_BLOCKSIZE
 #define X_BLOCKSIZE 8
+#endif
+#ifndef Y_BLOCKSIZE
 #define Y_BLOCKSIZE 8
+#endif
+#ifndef Z_BLOCKSIZE
 #define Z_BLOCKSIZE 2
+#endif
+
 #define TOTAL_BLOCKSIZE (X_BLOCKSIZE * Y_BLOCKSIZE * Z_BLOCKSIZE)
 
 #define CHECK_CUDA(func)                                                       \
@@ -40,91 +49,18 @@ static inline size_t get_index(size_t i, size_t j, size_t k, size_t size) {
 }
 
 
-double get_matrix_sum(double *M, size_t size) {
-    double sum = 0.0;
-
-    for (size_t i = 0; i < size; i++) {
-        for (size_t j = 0; j < size; j++) {
-            for (size_t k = 0; k < size; k++) {
-                sum += M[get_index(i, j, k, size)];
-            }
-        }
-    }
-
-    return sum;
-}
-
-/////////////////////////////////////////////////////////////////////
-//  TODO: divide code into two different files: .cpp and .cu
 /////////////////////////////////////////////////////////////////////
 
-
-template <uint32_t BLOCKSIZE>
-__device__ __forceinline__ void block_reduce_max(size_t i, double* data) {
-    if (BLOCKSIZE > 512) { if (i < 512 && i + 512 < BLOCKSIZE) { data[i] = Max(data[i], data[i + 512]); } __syncthreads(); }
-    if (BLOCKSIZE > 256) { if (i < 256 && i + 256 < BLOCKSIZE) { data[i] = Max(data[i], data[i + 256]); } __syncthreads(); }
-    if (BLOCKSIZE > 128) { if (i < 128 && i + 128 < BLOCKSIZE) { data[i] = Max(data[i], data[i + 128]); } __syncthreads(); }
-    if (BLOCKSIZE >  64) { if (i <  64 && i +  64 < BLOCKSIZE) { data[i] = Max(data[i], data[i +  64]); } __syncthreads(); }
-    if (BLOCKSIZE >  32) { if (i <  32 && i +  32 < BLOCKSIZE) { data[i] = Max(data[i], data[i +  32]); } __syncthreads(); }
-    if (BLOCKSIZE >  16) { if (i <  16 && i +  16 < BLOCKSIZE) { data[i] = Max(data[i], data[i +  16]); } __syncthreads(); }
-    if (BLOCKSIZE >   8) { if (i <   8 && i +   8 < BLOCKSIZE) { data[i] = Max(data[i], data[i +   8]); } __syncthreads(); }
-    if (BLOCKSIZE >   4) { if (i <   4 && i +   4 < BLOCKSIZE) { data[i] = Max(data[i], data[i +   4]); } __syncthreads(); }
-    if (BLOCKSIZE >   2) { if (i <   2 && i +   2 < BLOCKSIZE) { data[i] = Max(data[i], data[i +   2]); } __syncthreads(); }
-    if (BLOCKSIZE >   1) { if (i <   1 && i +   1 < BLOCKSIZE) { data[i] = Max(data[i], data[i +   1]); } __syncthreads(); }
-}
 
 template <uint32_t BLOCKSIZE>
 __device__ __forceinline__ void warp_reduce(size_t i, volatile double* data) {
-    if (BLOCKSIZE >= 64) data[i] = Max(data[i], data[i + 32]);
-    if (BLOCKSIZE >= 32) data[i] = Max(data[i], data[i + 16]);
-    if (BLOCKSIZE >= 16) data[i] = Max(data[i], data[i +  8]);
-    if (BLOCKSIZE >=  8) data[i] = Max(data[i], data[i +  4]);
-    if (BLOCKSIZE >=  4) data[i] = Max(data[i], data[i +  2]);
-    if (BLOCKSIZE >=  2) data[i] = Max(data[i], data[i +  1]);
+    if (BLOCKSIZE >= 64) data[i] += data[i + 32];
+    if (BLOCKSIZE >= 32) data[i] += data[i + 16];
+    if (BLOCKSIZE >= 16) data[i] += data[i +  8];
+    if (BLOCKSIZE >=  8) data[i] += data[i +  4];
+    if (BLOCKSIZE >=  4) data[i] += data[i +  2];
+    if (BLOCKSIZE >=  2) data[i] += data[i +  1];
 }
-
-// Doesn't work: race between A[id] and B[id] (presumably)
-template <uint32_t BLOCKSIZE>
-__global__ void jacobi(double *A, double *B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
-    const size_t idz = blockIdx.z * blockDim.z + threadIdx.z; // Z-axis thread id
-
-    const size_t id = idx + idy * NX + idz * NX * NY;
-
-    const size_t thread_id = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;  // thread index in block
-    const size_t block_id = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;         // block index in grid
-
-    __shared__ double shared_eps[BLOCKSIZE];    //1-dimensional shared memory
-
-    double tmp = 0.0;
-
-    if (0 < idx && idx < (NX-1) && 0 < idy && idy < (NY-1) && 0 < idz && idz < (NZ-1)) {
-        tmp = fabs(B[id] - A[id]);
-        A[id] = B[id];
-    }
-
-    shared_eps[thread_id] = tmp;
-
-    __syncthreads();
-
-    block_reduce_max<BLOCKSIZE>(thread_id, shared_eps);
-
-    if (thread_id == 0) {
-        eps_out[block_id] = shared_eps[0];
-    }
-
-    if (idx == 0 || idx >= (NX-1) || idy == 0 || idy >= (NY-1) || idz == 0 || idz >= (NZ-1)) {
-        return;
-    }
-
-    size_t offset_x = 1;
-    size_t offset_y = NX;
-    size_t offset_z = NX * NY;
-
-    B[id] = (A[id - offset_x] + A[id - offset_y] + A[id - offset_z] + A[id + offset_x] + A[id + offset_y] + A[id + offset_z]) / 6.0;
-}
-
 
 template <uint32_t BLOCKSIZE>
 __global__ void get_eps(const double * __restrict__ A, const double * __restrict__ B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
@@ -142,19 +78,17 @@ __global__ void get_eps(const double * __restrict__ A, const double * __restrict
     double tmp = 0.0;
 
     if (0 < idx && idx < (NX-1) && 0 < idy && idy < (NY-1) && 0 < idz && idz < (NZ-1)) {
-        tmp = fabs(B[id] - A[id]);
+        tmp = B[id] - A[id];
     }
 
-    shared_eps[thread_id] = tmp;
+    shared_eps[thread_id] = tmp * tmp;
 
     __syncthreads();
 
-//    block_reduce_max<BLOCKSIZE>(thread_id, shared_eps);
-
-//  Unroll reduction a little
-    if (BLOCKSIZE >= 512) { if (thread_id < 256) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 256]); } __syncthreads(); }
-    if (BLOCKSIZE >= 256) { if (thread_id < 128) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 128]); } __syncthreads(); }
-    if (BLOCKSIZE >= 128) { if (thread_id <  64) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id +  64]); } __syncthreads(); }
+//  Unroll block-wise reduction
+    if (BLOCKSIZE >= 512) { if (thread_id < 256) { shared_eps[thread_id] += shared_eps[thread_id + 256]; } __syncthreads(); }
+    if (BLOCKSIZE >= 256) { if (thread_id < 128) { shared_eps[thread_id] += shared_eps[thread_id + 128]; } __syncthreads(); }
+    if (BLOCKSIZE >= 128) { if (thread_id <  64) { shared_eps[thread_id] += shared_eps[thread_id +  64]; } __syncthreads(); }
 
     if (thread_id < 32) { warp_reduce<BLOCKSIZE>(thread_id, shared_eps); }
 
@@ -186,11 +120,10 @@ __global__ void update(const double * __restrict__ A, double *B, size_t NX, size
 }
 
 
-
 /////////////////////////////////////////////////////////////////////
 
 
-double jac3d(double *A, double *B, size_t size) {
+double get_eps(const double * __restrict__ A, const double * __restrict__ B, size_t size) {
     size_t NX = size, NY = size, NZ = size;
     double eps = 0.0;
 
@@ -198,8 +131,21 @@ double jac3d(double *A, double *B, size_t size) {
         for (size_t j = 1; j < NY-1; j++) {
             for (size_t k = 1; k < NZ-1; k++) {
                 size_t idx = get_index(i, j, k, size);
-                double tmp = fabs(B[idx] - A[idx]);
-                eps = Max(tmp, eps);
+                double tmp = B[idx] - A[idx];
+                eps += tmp * tmp;
+            }
+        }
+    }
+    return sqrt(eps);
+}
+
+void jac3d(double *A, double *B, size_t size) {
+    size_t NX = size, NY = size, NZ = size;
+
+    for (size_t i = 1; i < NX-1; i++) {
+        for (size_t j = 1; j < NY-1; j++) {
+            for (size_t k = 1; k < NZ-1; k++) {
+                size_t idx = get_index(i, j, k, size);
                 A[idx] = B[idx];
             }
         }
@@ -213,14 +159,15 @@ double jac3d(double *A, double *B, size_t size) {
         for (size_t j = 1; j < NY-1; j++) {
             for (size_t k = 1; k < NZ-1; k++) {
                 size_t idx = get_index(i, j, k, size);
-                B[idx] = (A[idx - offset_i] + A[idx - offset_j] + A[idx - offset_k] +
-                          A[idx + offset_i] + A[idx + offset_j] + A[idx + offset_k]) / 6.0;
+                B[idx] = (A[idx - offset_k] + A[idx - offset_j] + A[idx - offset_i] +
+                          A[idx + offset_k] + A[idx + offset_j] + A[idx + offset_i]) / 6.0;
             }
         }
     }
-
-    return eps;
 }
+
+
+/////////////////////////////////////////////////////////////////////
 
 
 int main(int argc, char **argv) {
@@ -296,38 +243,73 @@ int main(int argc, char **argv) {
 
     uint32_t grid_size = blocks_per_grid.x * blocks_per_grid.y * blocks_per_grid.z;
 
-    double eps = 0.0, *eps_out;
+    double eps = 1.0, *eps_out;
     CHECK_CUDA( cudaMalloc(&eps_out, sizeof(double) * grid_size) )
 
-    int it;
+    int it = 0, check = iters-1;
+    double t1 = 0.0, t2 = 0.0;
+
+    double *cpu_eps = NULL, *gpu_eps = NULL;
+    if ((cpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("cpu_eps allocation failed"); exit(3); }
+    if ((gpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("gpu_eps allocation failed"); exit(4); }
+    if (verification) {
+        check = 1;
+    }
 
     // TODO: Add some warmup iters
 
-    double t1 = timer();
+    if (verification || (drv == driver_t::CPU)) {
+        t1 = timer();
 
-    for (it = 1; it <= iters; it++) {
-        if (drv == driver_t::GPU) {
-//            jacobi<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out); // one big kernel
-            get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+        for (it = 0; it < iters; it++) {
+            jac3d(h_A, h_B, size);
 
-            thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
-            eps = *(thrust::max_element(thrust::device, eps_ptr, eps_ptr + grid_size));
-
-            CHECK_CUDA( cudaMemcpy(d_A, d_B, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToDevice) )
-
-            update<<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ);
-
-        } else {
-            eps = jac3d(h_A, h_B, size);
+            if (it % check == 0) {
+                eps = get_eps(h_A, h_B, size);
+                cpu_eps[it] = eps;
+//                if (eps < MAX_EPS) {
+//                    break;
+//                }
+            }
         }
 
-        if (verification) { printf(" IT = %4i   EPS = %14.12E\n", it, eps); }
-        if (eps < MAXEPS) { break; }
+        t2 = timer();
     }
 
-    double t2 = timer();
+    if (verification || (drv == driver_t::GPU)) {
+        t1 = timer();
 
-    printf(" total ITs = %4i    Final EPS = %14.12E\n", it, eps);
+        for (it = 0; it < iters; it++) {
+            CHECK_CUDA( cudaMemcpy(d_A, d_B, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToDevice) )
+            update<<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ);
+
+            if (it % check == 0) {
+                get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+                thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
+                eps = sqrt( thrust::reduce(thrust::device, eps_ptr, eps_ptr + grid_size, 0.0) );
+                gpu_eps[it] = eps;
+//                if (eps < MAX_EPS) {
+//                    break;
+//                }
+            }
+        }
+
+        t2 = timer();
+    }
+
+    if (verification) {
+        for (int i = 0; i < it; i++) {
+            double tmp = fabs(cpu_eps[i] - gpu_eps[i]);
+            if (tmp >= MAX_EPS) {
+                printf(" IT = %4i, EPS check failed!\n", i);
+                printf("cpu_eps[%i] = %3.11E gpu_eps[%i] = %3.11E, diff = %3.11E\n", i, cpu_eps[i], i, gpu_eps[i], tmp);
+//                break;
+            }
+        }
+    }
+
+    free(cpu_eps);
+    free(gpu_eps);
 
     free(h_A);
     free(h_B);
@@ -336,12 +318,25 @@ int main(int argc, char **argv) {
     CHECK_CUDA( cudaFree(d_B) )
     CHECK_CUDA( cudaFree(eps_out) )
 
-    printf(" Jacobi3D Benchmark Completed.\n");
-    printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
-    printf(" Iterations      =       %12d\n", iters);
-    printf(" Time in seconds =       %12.6lf\n", t2 - t1);
-    printf(" Operation type  =     floating point\n");
-    printf(" Driver          = %18s\n", driver.c_str());
-    printf(" END OF Jacobi3D Benchmark\n");
+    if (verification) {
+        printf("\n ===================================\n");
+        printf(" Verification Completed.\n");
+        printf(" Final eps      = %1.12E\n", eps);
+        printf(" Test size      = %4ld x %4ld x %4ld\n", NX, NY, NZ);
+        printf(" Test iters     =       %12d\n", iters);
+        printf(" Operation type =     floating point\n");
+        printf("\n ===================================\n");
+    } else {
+        printf("\n ===================================\n");
+        printf(" Jacobi3D Benchmark Completed.\n");
+        printf(" Final eps       = %1.12E\n", eps);
+        printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
+        printf(" Iterations      =       %12d\n", it);
+        printf(" Time in seconds =       %12.6lf\n", t2 - t1);
+        printf(" Operation type  =     floating point\n");
+        printf(" Driver          = %18s\n", driver.c_str());
+        printf(" END OF Jacobi3D Benchmark\n");
+        printf("\n ===================================\n");
+    }
     return 0;
 }

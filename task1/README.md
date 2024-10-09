@@ -44,4 +44,4 @@ The actual memory bus bandwidth for the CPU is 43 GB/s, and for the GPU is 417 G
 5. size = 1000 (14.9 Gb)
 > CPU to GPU execution time: 552.025841 to 22.211708 per 200 iterations
 
-> Speedup is 10 times
+> Speedup is 25 times
