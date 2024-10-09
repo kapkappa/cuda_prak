@@ -9,16 +9,15 @@
 #include <thrust/device_ptr.h>
 
 #define Max(a, b) ((a) > (b) ? (a) : (b))
-#define Norm(a, b) (sqrt(a*a+b*b))
 
 #define MAX_EPS 5E-1
 #define MAX_DIFF 1E-6
 
 #ifndef X_BLOCKSIZE
-#define X_BLOCKSIZE 8
+#define X_BLOCKSIZE 16
 #endif
 #ifndef Y_BLOCKSIZE
-#define Y_BLOCKSIZE 8
+#define Y_BLOCKSIZE 1
 #endif
 #ifndef Z_BLOCKSIZE
 #define Z_BLOCKSIZE 2
@@ -246,14 +245,14 @@ int main(int argc, char **argv) {
     double eps = 1.0, *eps_out;
     CHECK_CUDA( cudaMalloc(&eps_out, sizeof(double) * grid_size) )
 
-    int it = 0, check = iters-1;
-    double t1 = 0.0, t2 = 0.0;
+    int it = 0;
+    double t1 = 0.0, t2 = 0.0, t3 = 0.0;
+    float time1 = 0.0, time2 = 0.0;
 
     double *cpu_eps = NULL, *gpu_eps = NULL;
-    if ((cpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("cpu_eps allocation failed"); exit(3); }
-    if ((gpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("gpu_eps allocation failed"); exit(4); }
     if (verification) {
-        check = 1;
+        if ((cpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("cpu_eps allocation failed"); exit(3); }
+        if ((gpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("gpu_eps allocation failed"); exit(4); }
     }
 
     // TODO: Add some warmup iters
@@ -264,52 +263,79 @@ int main(int argc, char **argv) {
         for (it = 0; it < iters; it++) {
             jac3d(h_A, h_B, size);
 
-            if (it % check == 0) {
+            if (verification) {
                 eps = get_eps(h_A, h_B, size);
                 cpu_eps[it] = eps;
-//                if (eps < MAX_EPS) {
-//                    break;
-//                }
             }
         }
 
         t2 = timer();
+        time1 = t2-t1;
+
+        if (!verification) {
+            eps = get_eps(h_A, h_B, size);
+        }
+
+        t3 = timer();
+        time2 = t3-t2;
     }
 
     if (verification || (drv == driver_t::GPU)) {
-        t1 = timer();
+
+        cudaEvent_t start, stop;
+
+        CHECK_CUDA( cudaEventCreate(&start) )
+        CHECK_CUDA( cudaEventCreate(&stop) )
+
+        CHECK_CUDA( cudaEventRecord(start, 0) )
 
         for (it = 0; it < iters; it++) {
             CHECK_CUDA( cudaMemcpy(d_A, d_B, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToDevice) )
             update<<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ);
-
-            if (it % check == 0) {
+            if (verification) {
                 get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
                 thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
                 eps = sqrt( thrust::reduce(thrust::device, eps_ptr, eps_ptr + grid_size, 0.0) );
                 gpu_eps[it] = eps;
-//                if (eps < MAX_EPS) {
-//                    break;
-//                }
             }
         }
 
-        t2 = timer();
+        CHECK_CUDA( cudaEventRecord(stop, 0) )
+
+        CHECK_CUDA( cudaEventSynchronize(stop) )
+        CHECK_CUDA( cudaEventElapsedTime(&time1, start, stop) )
+
+        time1 = time1 / 1000.0;
+
+        CHECK_CUDA( cudaEventRecord(start, 0) )
+
+        if (!verification) {
+            get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+            thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
+            eps = sqrt( thrust::reduce(thrust::device, eps_ptr, eps_ptr + grid_size, 0.0) );
+        }
+
+        CHECK_CUDA( cudaEventRecord(stop, 0) )
+        CHECK_CUDA( cudaEventSynchronize(stop) )
+        CHECK_CUDA( cudaEventElapsedTime(&time2, start, stop) )
+
+        time2 = time2 / 1000.0;
+
+        CHECK_CUDA( cudaEventDestroy(start) )
+        CHECK_CUDA( cudaEventDestroy(stop) )
     }
 
     if (verification) {
         for (int i = 0; i < it; i++) {
             double tmp = fabs(cpu_eps[i] - gpu_eps[i]);
-            if (tmp >= MAX_EPS) {
+            if (tmp >= MAX_DIFF) {
                 printf(" IT = %4i, EPS check failed!\n", i);
                 printf("cpu_eps[%i] = %3.11E gpu_eps[%i] = %3.11E, diff = %3.11E\n", i, cpu_eps[i], i, gpu_eps[i], tmp);
-//                break;
             }
         }
+        free(cpu_eps);
+        free(gpu_eps);
     }
-
-    free(cpu_eps);
-    free(gpu_eps);
 
     free(h_A);
     free(h_B);
@@ -332,7 +358,8 @@ int main(int argc, char **argv) {
         printf(" Final eps       = %1.12E\n", eps);
         printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
         printf(" Iterations      =       %12d\n", it);
-        printf(" Time in seconds =       %12.6lf\n", t2 - t1);
+        printf(" Jacobi Time     =       %8.6lf sec\n", time1);
+        printf(" 1 Eps Time      =       %8.6lf sec\n", time2);
         printf(" Operation type  =     floating point\n");
         printf(" Driver          = %18s\n", driver.c_str());
         printf(" END OF Jacobi3D Benchmark\n");

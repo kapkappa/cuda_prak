@@ -1,6 +1,6 @@
 #!/bin/bash
 
-rm -f logs/log.err log.out
+rm -f logs/log.err logs/log.out
 
 #GPU
 if [ 1 -eq 0 ]; then

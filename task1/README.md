@@ -5,22 +5,14 @@
 
 The actual memory bus bandwidth for the CPU is 43 GB/s, and for the GPU is 417 GB/s.
 
-1. size = 150 (50 Mb)
-> CPU to GPU execition time: 0.953228 to 0.141007 per 200 iterations
+| Size (side/Mb) | CPU      | GPU       | speedup   |
+|     :----:     | :----:   | :----:    | :----:    |
+|  150 / 0.05 Gb | 0.841    | 0.106     | 7.95      |
+|  300 / 0.40 Gb | 7.233    | 0.778     | 9.29      |
+|  500 / 1.86 Gb | 35.091   | 3.551     | 9.88      |
+|  750 / 6.29 Gb | 131.230  | 11.769    | 11.15     |
 
-> Speedup is 6.76 times
-2. size = 300 (400 Mb)
-> CPU to GPU execition time: 7.848086 to 1.023979 per 200 iterations
-
-> Speedup is 7.6 times
-3. size = 500 (1.86 Gb) 
-> CPU to GPU execution time: 36.874870 to 4.592491 per 200 iterations
-
-> Speedup is 8 times
-4. size = 750 (6.29 Gb)
-> CPU to GPU execution time: 141.973732 to 15.452016 per 200 iterations
-
-> Speedup is 9.2 times
+The times are given for 200 iterations without taking into account the calculation of the residual.
 
 ## Polus node
 2x 10-cores IBM POWER8s, NVIDIA Tesla P100 GPU (16 Gb)
