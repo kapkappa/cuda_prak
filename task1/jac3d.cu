@@ -14,13 +14,13 @@
 #define MAX_DIFF 1E-6
 
 #ifndef X_BLOCKSIZE
-#define X_BLOCKSIZE 16
+#define X_BLOCKSIZE 4
 #endif
 #ifndef Y_BLOCKSIZE
-#define Y_BLOCKSIZE 1
+#define Y_BLOCKSIZE 2
 #endif
 #ifndef Z_BLOCKSIZE
-#define Z_BLOCKSIZE 2
+#define Z_BLOCKSIZE 4
 #endif
 
 #define TOTAL_BLOCKSIZE (X_BLOCKSIZE * Y_BLOCKSIZE * Z_BLOCKSIZE)
@@ -62,12 +62,17 @@ __device__ __forceinline__ void warp_reduce(size_t i, volatile double* data) {
 }
 
 template <uint32_t BLOCKSIZE>
-__global__ void get_eps(const double * __restrict__ A, const double * __restrict__ B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
+__global__ void get_eps(cudaPitchedPtr d_A, cudaPitchedPtr d_B, size_t NX, size_t NY, size_t NZ, double *eps_out) {
+
+    char * A = (char*)d_A.ptr;
+    char * B = (char*)d_B.ptr;
+
+    size_t step_y = d_A.pitch;
+	size_t step_z = d_A.pitch * NX;
+
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
     const size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
     const size_t idz = blockIdx.z * blockDim.z + threadIdx.z; // Z-axis thread id
-
-    const size_t id = idx + idy * NX + idz * NX * NY;
 
     const size_t thread_id = threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;  // thread index in block
     const size_t block_id = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;         // block index in grid
@@ -77,7 +82,7 @@ __global__ void get_eps(const double * __restrict__ A, const double * __restrict
     double tmp = 0.0;
 
     if (0 < idx && idx < (NX-1) && 0 < idy && idy < (NY-1) && 0 < idz && idz < (NZ-1)) {
-        tmp = B[id] - A[id];
+        tmp = ((double*)(B + idy * step_y + idz * step_z))[idx] - ((double*)(A + idy * step_y + idz * step_z))[idx];
     }
 
     shared_eps[thread_id] = tmp * tmp;
@@ -98,31 +103,35 @@ __global__ void get_eps(const double * __restrict__ A, const double * __restrict
     return;
 }
 
-__global__ void update(const double * __restrict__ A, double *B, size_t NX, size_t NY, size_t NZ) {
+__global__ void update(cudaPitchedPtr d_A, cudaPitchedPtr d_B, size_t NX, size_t NY, size_t NZ) {
+
+    char * A = (char *)d_A.ptr;
+    char * B = (char *)d_B.ptr;
+
+    size_t step_y = d_A.pitch;
+	size_t step_z = d_A.pitch * NX;
+
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
     const size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
     const size_t idz = blockIdx.z * blockDim.z + threadIdx.z; // Z-axis thread id
 
-    const size_t id = idx + idy * NX + idz * NX * NY;
+    char* A_id = A + idy * step_y + idz * step_z;
+    char* B_id = B + idy * step_y + idz * step_z;
 
     if (idx == 0 || idx >= (NX-1) || idy == 0 || idy >= (NY-1) || idz == 0 || idz >= (NZ-1)) {
         return;
     }
 
-    size_t offset_x = 1;
-    size_t offset_y = NX;
-    size_t offset_z = NX * NY;
-
-    B[id] = (A[id - offset_x] + A[id - offset_y] + A[id - offset_z] + A[id + offset_x] + A[id + offset_y] + A[id + offset_z]) / 6.0;
-
-    return;
+    ((double*)B_id)[idx] = ( ((double*)(A_id))[idx + 1] + ((double*)(A_id))[idx - 1] +
+                             ((double*)(A_id + step_y))[idx] + ((double*)(A_id - step_y))[idx] +
+                             ((double*)(A_id + step_z))[idx] + ((double*)(A_id - step_z))[idx] ) / 6.0;
 }
 
 
 /////////////////////////////////////////////////////////////////////
 
 
-double get_eps(const double * __restrict__ A, const double * __restrict__ B, size_t size) {
+double get_eps(const double *__restrict__ A, const double *__restrict__ B, size_t size) {
     size_t NX = size, NY = size, NZ = size;
     double eps = 0.0;
 
@@ -228,12 +237,33 @@ int main(int argc, char **argv) {
         }
     }
 
-    double *d_A, *d_B;
-    CHECK_CUDA( cudaMalloc(&d_A, NX * NY * NZ * sizeof(double)) )
-    CHECK_CUDA( cudaMalloc(&d_B, NX * NY * NZ * sizeof(double)) )
+    cudaExtent extent_bytes = make_cudaExtent(sizeof(double) * NX, NY, NZ);
 
-    CHECK_CUDA( cudaMemcpy(d_A, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
-    CHECK_CUDA( cudaMemcpy(d_B, h_B, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
+    cudaPitchedPtr dev_pitched_A, dev_pitched_B;
+
+    CHECK_CUDA( cudaMalloc3D(&dev_pitched_A, extent_bytes) )  // Allocate pitched structure
+    CHECK_CUDA( cudaMalloc3D(&dev_pitched_B, extent_bytes) )
+
+    CHECK_CUDA( cudaMemset3D(dev_pitched_A, 0.0, extent_bytes) )  // Init dev_A with 0.0
+    CHECK_CUDA( cudaMemset3D(dev_pitched_B, 0.0, extent_bytes) )
+
+    cudaPitchedPtr host_pitched_A = make_cudaPitchedPtr((void*)h_A, sizeof(double) * NX, NY, NZ);
+    cudaPitchedPtr host_pitched_B = make_cudaPitchedPtr((void*)h_B, sizeof(double) * NX, NY, NZ);
+
+    cudaMemcpy3DParms params = {0};
+    params.extent = extent_bytes;
+    params.kind   = cudaMemcpyHostToDevice;
+
+    params.srcPtr = host_pitched_A;
+    params.dstPtr = dev_pitched_A;
+
+    cudaMemcpy3D(&params);
+
+    params.srcPtr = host_pitched_B;
+    params.dstPtr = dev_pitched_B;
+
+    cudaMemcpy3D(&params);
+
 
     dim3 threads_per_block = dim3(X_BLOCKSIZE, Y_BLOCKSIZE, Z_BLOCKSIZE);
     dim3 blocks_per_grid = dim3((size-1) / threads_per_block.x + 1,
@@ -255,7 +285,6 @@ int main(int argc, char **argv) {
         if ((gpu_eps = (double*)calloc(iters, sizeof(double))) == NULL) { perror("gpu_eps allocation failed"); exit(4); }
     }
 
-    // TODO: Add some warmup iters
 
     if (verification || (drv == driver_t::CPU)) {
         t1 = timer();
@@ -280,6 +309,7 @@ int main(int argc, char **argv) {
         time2 = t3-t2;
     }
 
+
     if (verification || (drv == driver_t::GPU)) {
 
         cudaEvent_t start, stop;
@@ -289,11 +319,15 @@ int main(int argc, char **argv) {
 
         CHECK_CUDA( cudaEventRecord(start, 0) )
 
+        params.dstPtr = dev_pitched_A;
+        params.srcPtr = dev_pitched_B;
+
         for (it = 0; it < iters; it++) {
-            CHECK_CUDA( cudaMemcpy(d_A, d_B, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToDevice) )
-            update<<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ);
+            cudaMemcpy3D(&params);
+            update<<<blocks_per_grid, threads_per_block>>>(dev_pitched_A, dev_pitched_B, NX, NY, NZ);
+
             if (verification) {
-                get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
+                get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(dev_pitched_A, dev_pitched_B, NX, NY, NZ, eps_out);
                 thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
                 eps = sqrt( thrust::reduce(thrust::device, eps_ptr, eps_ptr + grid_size, 0.0) );
                 gpu_eps[it] = eps;
@@ -310,8 +344,8 @@ int main(int argc, char **argv) {
         CHECK_CUDA( cudaEventRecord(start, 0) )
 
         if (!verification) {
-            get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(d_A, d_B, NX, NY, NZ, eps_out);
-            thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
+            get_eps<TOTAL_BLOCKSIZE><<<blocks_per_grid, threads_per_block>>>(dev_pitched_A, dev_pitched_B, NX, NY, NZ, eps_out);
+            thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast((double *)eps_out);
             eps = sqrt( thrust::reduce(thrust::device, eps_ptr, eps_ptr + grid_size, 0.0) );
         }
 
@@ -324,6 +358,7 @@ int main(int argc, char **argv) {
         CHECK_CUDA( cudaEventDestroy(start) )
         CHECK_CUDA( cudaEventDestroy(stop) )
     }
+
 
     if (verification) {
         for (int i = 0; i < it; i++) {
@@ -340,8 +375,8 @@ int main(int argc, char **argv) {
     free(h_A);
     free(h_B);
 
-    CHECK_CUDA( cudaFree(d_A) )
-    CHECK_CUDA( cudaFree(d_B) )
+    CHECK_CUDA( cudaFree(dev_pitched_A.ptr) )
+    CHECK_CUDA( cudaFree(dev_pitched_B.ptr) )
     CHECK_CUDA( cudaFree(eps_out) )
 
     if (verification) {

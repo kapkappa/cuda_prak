@@ -1,5 +1,5 @@
-CFLAGS	:=	-O3 -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize
-FLAGS	:=	$(addprefix -Xcompiler ,$(CFLAGS)) #-Xptxas -dlcm=cg
+CFLAGS	:=	-O3 -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize -m64 -march=core-avx2 -Wno-missing-field-initializers
+FLAGS	:=	-arch=native $(addprefix -Xcompiler ,$(CFLAGS)) #-Xptxas -dlcm=cg
 
 FLAGS += $(BS)
 
