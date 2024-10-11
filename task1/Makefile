@@ -1,15 +1,28 @@
-CFLAGS	:=	-O3 -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize
-FLAGS	:=	$(addprefix -Xcompiler ,$(CFLAGS)) #-Xptxas -dlcm=cg
+CXX = g++
+CUDA_DIR = /usr/local/cuda
+CUDA_COMPILER = $(CUDA_DIR)/bin/nvcc
 
-FLAGS += $(BS)
+CXXFLAGS = -O3 -w -g -ffast-math -funroll-loops -ftree-vectorize $(BS)
+CUDA_FLAGS = $(addprefix -Xcompiler ,$(CXXFLAGS)) -arch=native #-arch=sm_86
 
-all: clean gpu
+INCLUDE_PATH = -I /usr/local/cuda/include
+LIBRARY_PATH = -L $(CUDA_DIR)/lib -L $(CUDA_DIR)/lib64
 
-cpu:
-	gcc $(CFLAGS) jac3d.c -o prog_orig
+.DEFAULT_GOAL := all
 
-gpu:
-	nvcc $(FLAGS) jac3d.cu -o prog
+all: clean jac3d
+
+original:
+	gcc -O0 -w -g jac3d.c -o original
+
+jac3d: jac3d.o jac3d_gpu.o
+	$(CXX) jac3d.o jac3d_gpu.o $(LIBRARY_PATH) -lcudart -o prog
+
+jac3d.o: main.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDE_PATH) -c main.cpp -o jac3d.o
+
+jac3d_gpu.o: jac3d.cu
+	$(CUDA_COMPILER) $(CUDA_FLAGS) -c jac3d.cu -o jac3d_gpu.o
 
 clean:
-	rm -f prog prog_orig
+	rm -f *.o prog original
