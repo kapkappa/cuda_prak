@@ -9,8 +9,10 @@ for x in 4 8 16 32; do
 
             make BS="-DX_BLOCKSIZE=${x} -DY_BLOCKSIZE=${y} -DZ_BLOCKSIZE=${z}" --silent
 
-#            echo $x $y $z
-            time1=$(./prog -driver GPU -size 750 -iters 200 | grep "Jacobi Time" | tr -s '  ' ' ' | cut -d ' ' -f5)
+            time1=$(./prog -driver GPU -size 500 -iters 200 | grep "Jacobi Time" | tr -s '  ' ' ' | cut -d ' ' -f5)
+
+            echo $x $y $z
+            echo $time1
 
             if [ 1 -eq "$(echo "$min > $time1" | bc)" ]
             then

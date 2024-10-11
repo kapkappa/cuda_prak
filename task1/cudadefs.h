@@ -3,10 +3,10 @@
 #include <cuda_runtime_api.h>
 
 #ifndef X_BLOCKSIZE
-#define X_BLOCKSIZE 16
+#define X_BLOCKSIZE 4
 #endif
 #ifndef Y_BLOCKSIZE
-#define Y_BLOCKSIZE 1
+#define Y_BLOCKSIZE 4
 #endif
 #ifndef Z_BLOCKSIZE
 #define Z_BLOCKSIZE 2
