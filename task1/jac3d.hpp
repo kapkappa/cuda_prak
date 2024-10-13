@@ -28,16 +28,6 @@ double get_eps(const double * __restrict__ A, const double * __restrict__ B, siz
 
 void jac3d(double *A, double *B, size_t size) {
     size_t NX = size, NY = size, NZ = size;
-
-    for (size_t i = 1; i < NX-1; i++) {
-        for (size_t j = 1; j < NY-1; j++) {
-            for (size_t k = 1; k < NZ-1; k++) {
-                size_t idx = get_index(i, j, k, size);
-                A[idx] = B[idx];
-            }
-        }
-    }
-
     size_t offset_i = NZ * NY;
     size_t offset_j = NZ;
     size_t offset_k = 1;

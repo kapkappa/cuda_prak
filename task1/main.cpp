@@ -104,6 +104,7 @@ int main(int argc, char **argv) {
         t1 = timer();
 
         for (it = 0; it < iters; it++) {
+            std::swap(h_A, h_B);
             cpu::jac3d(h_A, h_B, size);
 
             if (verification) {
@@ -125,7 +126,7 @@ int main(int argc, char **argv) {
         t1 = timer();
 
         for (it = 0; it < iters; it++) {
-            CHECK_CUDA( cudaMemcpy(d_A, d_B, sizeof(double)*NX*NY*NZ, cudaMemcpyDeviceToDevice) )
+            std::swap(d_A, d_B);
             gpu::update_wrapper(d_A, d_B, NX, NY, NZ);
             if (verification) {
                 gpu_eps[it] = gpu::get_eps_wrapper(d_A, d_B, NX, NY, NZ, eps_out);
