@@ -4,6 +4,6 @@
 
 namespace gpu {
 
-double update_wrapper(double *A, size_t NX, size_t NY, size_t NZ);
+double update_wrapper(double *A, double *B, size_t NX, size_t NY, size_t NZ);
 
 } // gpu
