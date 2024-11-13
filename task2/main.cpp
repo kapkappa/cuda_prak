@@ -69,17 +69,8 @@ int main(int argc, char **argv) {
 
     double *d_A, *d_B;
     CHECK_CUDA( cudaMalloc((void**)&d_A, NX * NY * NZ * sizeof(double)) )
-    CHECK_CUDA( cudaMalloc((void**)&d_B, NX * NY * NZ * sizeof(double)) )
 
     CHECK_CUDA( cudaMemcpy(d_A, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
-    CHECK_CUDA( cudaMemcpy(d_B, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
-
-    dim3 threads_per_block = dim3(X_BLOCKSIZE, Y_BLOCKSIZE, Z_BLOCKSIZE);
-    dim3 blocks_per_grid = dim3((size-1) / threads_per_block.x + 1,
-                                (size-1) / threads_per_block.y + 1,
-                                (size-1) / threads_per_block.z + 1);
-
-    uint32_t grid_size = blocks_per_grid.x * blocks_per_grid.y * blocks_per_grid.z;
 
     // TODO: Add some warmup iters
     int it = 0;
@@ -104,7 +95,7 @@ int main(int argc, char **argv) {
         t1 = timer();
 
         for (it = 0; it < iters; it++) {
-            eps = gpu::update_wrapper(d_A, d_B, NX, NY, NZ);
+            eps = gpu::update_wrapper(d_A, NX, NY, NZ);
 
             printf(" IT = %4i   EPS = %14.7E\n", it, eps);
             if (eps < max_eps)
@@ -117,7 +108,6 @@ int main(int argc, char **argv) {
 
     free(h_A);
     CHECK_CUDA( cudaFree(d_A) )
-    CHECK_CUDA( cudaFree(d_B) )
 
     printf("\n ===================================\n");
     printf(" ADI Benchmark Completed.\n");

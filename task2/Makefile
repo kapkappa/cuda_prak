@@ -2,7 +2,7 @@ CXX = g++
 CUDA_DIR = /usr/local/cuda
 CUDA_COMPILER = $(CUDA_DIR)/bin/nvcc
 
-CXXFLAGS = -O3 -w -g -ffast-math -funroll-loops -ftree-vectorize $(BS)
+CXXFLAGS = -O3 -w -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize $(BS)
 CUDA_FLAGS = $(addprefix -Xcompiler ,$(CXXFLAGS)) #-arch=native #-arch=sm_86
 
 INCLUDE_PATH = -I /usr/local/cuda/include
