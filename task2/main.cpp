@@ -69,8 +69,14 @@ int main(int argc, char **argv) {
 
     double *d_A, *d_B;
     CHECK_CUDA( cudaMalloc((void**)&d_A, NX * NY * NZ * sizeof(double)) )
-
     CHECK_CUDA( cudaMemcpy(d_A, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
+
+    dim3 threads_per_block = dim3(X_BLOCKSIZE, Y_BLOCKSIZE);
+    dim3 blocks_per_grid = dim3((NY-1) / X_BLOCKSIZE + 1, (NZ-1) / Y_BLOCKSIZE + 1);
+    uint32_t grid_size = blocks_per_grid.x * blocks_per_grid.y;
+
+    double *eps_out;
+    CHECK_CUDA( cudaMalloc((void**)&eps_out, grid_size * sizeof(double)) )
 
     // TODO: Add some warmup iters
     int it = 0;
@@ -83,9 +89,9 @@ int main(int argc, char **argv) {
         for (it = 0; it < iters; it++) {
             eps = cpu::adi3d(h_A, size);
 
-            printf(" IT = %4i   EPS = %14.7E\n", it, eps);
-            if (eps < max_eps)
-                break;
+//            printf(" IT = %4i   EPS = %14.7E\n", it, eps);
+//            if (eps < max_eps)
+//                break;
         }
 
         t2 = timer();
@@ -95,11 +101,11 @@ int main(int argc, char **argv) {
         t1 = timer();
 
         for (it = 0; it < iters; it++) {
-            eps = gpu::update_wrapper(d_A, NX, NY, NZ);
+            eps = gpu::update_wrapper(d_A, NX, NY, NZ, blocks_per_grid, threads_per_block, eps_out);
 
-            printf(" IT = %4i   EPS = %14.7E\n", it, eps);
-            if (eps < max_eps)
-                break;
+//            printf(" IT = %4i   EPS = %14.7E\n", it, eps);
+//            if (eps < max_eps)
+//                break;
         }
 
         CHECK_CUDA( cudaDeviceSynchronize() )
@@ -108,14 +114,15 @@ int main(int argc, char **argv) {
 
     free(h_A);
     CHECK_CUDA( cudaFree(d_A) )
+    CHECK_CUDA( cudaFree(eps_out) )
 
     printf("\n ===================================\n");
     printf(" ADI Benchmark Completed.\n");
     printf(" Final eps       = %1.12E\n", eps);
     printf(" Size            = %4ld x %4ld x %4ld\n", NX, NY, NZ);
     printf(" Iterations      =       %12d\n", it);
-    printf(" ADI Time     =       %8.6lf sec\n", t2-t1);
-    printf(" Operation type  =     double precision\n");
+    printf(" ADI Time        =       %8.6lf sec\n", t2-t1);
+    printf(" Operation type  =   double precision\n");
     printf(" Driver          = %18s\n", driver.c_str());
     printf(" Verification    =       %12s\n", (fabs(eps - EPS) < DIFF ? "SUCCESSFUL" : "UNSUCCESSFUL"));
     printf(" END OF ADI Benchmark\n");

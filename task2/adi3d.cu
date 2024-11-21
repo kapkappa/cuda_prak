@@ -10,18 +10,18 @@ namespace gpu {
 
 template <uint32_t BLOCKSIZE>
 __device__ __forceinline__ void warp_reduce_max(size_t i, volatile double* data) {
-    if (BLOCKSIZE >= 64) { data[i] = Max(data[i], data[i + 32]); __syncthreads(); }
-    if (BLOCKSIZE >= 32) { data[i] = Max(data[i], data[i + 16]); __syncthreads(); }
-    if (BLOCKSIZE >= 16) { data[i] = Max(data[i], data[i +  8]); __syncthreads(); }
-    if (BLOCKSIZE >=  8) { data[i] = Max(data[i], data[i +  4]); __syncthreads(); }
-    if (BLOCKSIZE >=  4) { data[i] = Max(data[i], data[i +  2]); __syncthreads(); }
-    if (BLOCKSIZE >=  2) { data[i] = Max(data[i], data[i +  1]); __syncthreads(); }
+    if (BLOCKSIZE >= 64) { data[i] = Max(data[i], data[i + 32]); }
+    if (BLOCKSIZE >= 32) { data[i] = Max(data[i], data[i + 16]); }
+    if (BLOCKSIZE >= 16) { data[i] = Max(data[i], data[i +  8]); }
+    if (BLOCKSIZE >=  8) { data[i] = Max(data[i], data[i +  4]); }
+    if (BLOCKSIZE >=  4) { data[i] = Max(data[i], data[i +  2]); }
+    if (BLOCKSIZE >=  2) { data[i] = Max(data[i], data[i +  1]); }
 }
 
 __global__ void update1(double * A, size_t NX, size_t NY, size_t NZ, size_t idx) {
 
-    const size_t idy = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
+    const size_t idy = blockIdx.x * blockDim.x + threadIdx.x; // Y-axis thread id
+    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // Z-axis thread id
 
     if (idy == 0 || idy >= NX-1 || idz == 0 || idz >= NY-1) {
         return;
@@ -36,7 +36,7 @@ __global__ void update1(double * A, size_t NX, size_t NY, size_t NZ, size_t idx)
 __global__ void update2(double * A, size_t NX, size_t NY, size_t NZ, size_t idy) {
 
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // X-axis thread id
+    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // Z-axis thread id
 
     if (idx == 0 || idx >= NX-1 || idz == 0 || idz >= NZ-1) {
         return;
@@ -73,9 +73,10 @@ __global__ void get_eps(double * A, size_t NX, size_t NY, size_t NZ, double *eps
     __syncthreads();
 
 //  Unroll block-wise reduction
-    if (BLOCKSIZE >= 512) { if (thread_id < 256) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 256]); } __syncthreads(); }
-    if (BLOCKSIZE >= 256) { if (thread_id < 128) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 128]); } __syncthreads(); }
-    if (BLOCKSIZE >= 128) { if (thread_id <  64) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id +  64]); } __syncthreads(); }
+    if (BLOCKSIZE >= 1024) { if (thread_id < 512) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 512]); } __syncthreads(); }
+    if (BLOCKSIZE >= 512 ) { if (thread_id < 256) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 256]); } __syncthreads(); }
+    if (BLOCKSIZE >= 256 ) { if (thread_id < 128) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id + 128]); } __syncthreads(); }
+    if (BLOCKSIZE >= 128 ) { if (thread_id <  64) { shared_eps[thread_id] = Max(shared_eps[thread_id], shared_eps[thread_id +  64]); } __syncthreads(); }
 
     if (thread_id < 32) { warp_reduce_max<BLOCKSIZE>(thread_id, shared_eps); }
 
@@ -87,29 +88,26 @@ __global__ void get_eps(double * A, size_t NX, size_t NY, size_t NZ, double *eps
 }
 
 
-double update_wrapper(double *A, size_t NX, size_t NY, size_t NZ) {
+double update_wrapper(double *A, size_t NX, size_t NY, size_t NZ, dim3 BPG, dim3 TPB, double * eps_out) {
 
-    dim3 threads_per_block_2 = dim3(16, 16);
-    dim3 blocks_per_grid_2 = dim3((NY-1) / 16 + 1, (NZ-1) / 16 + 1);
-
+    // 3.67 sec
     for (int i = 1; i < NX-1; i++) {
-        update1<<<blocks_per_grid_2, threads_per_block_2>>>(A, NX, NY, NZ, i);
+        update1<<<BPG, TPB>>>(A, NX, NY, NZ, i);
     }
 
+    // 0.34 sec
     for (int j = 1; j < NY-1; j++) {
-        update2<<<blocks_per_grid_2, threads_per_block_2>>>(A, NX, NY, NZ, j);
+        update2<<<BPG, TPB>>>(A, NX, NY, NZ, j);
     }
-
-    uint32_t grid_size = blocks_per_grid_2.x * blocks_per_grid_2.y;
-    thrust::device_vector<double> eps_out(grid_size);
-    thrust::device_ptr<double> eps_ptr = eps_out.data();
 
     double eps = 0.0;
+    uint32_t grid_size = BPG.x * BPG.y;
 
+    thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
+
+    // 2.08 sec
     for (int k = 1; k < NZ-1; k++) {
-        thrust::fill(eps_ptr, eps_ptr + grid_size, 0.0);
-
-        get_eps<16*16><<<blocks_per_grid_2, threads_per_block_2>>>(A, NX, NY, NZ, thrust::raw_pointer_cast(eps_out.data()), k);
+        get_eps<TOTAL_BLOCKSIZE><<<BPG, TPB>>>(A, NX, NY, NZ, eps_out, k);
 
         double local_eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));
 
