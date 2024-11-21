@@ -100,7 +100,7 @@ double update_wrapper(double *A, size_t NX, size_t NY, size_t NZ, dim3 BPG, dim3
         update2<<<BPG, TPB>>>(A, NX, NY, NZ, j);
     }
 
-    double eps = 1.0;
+    double eps = 0.0;
 
     uint32_t grid_size = BPG.x * BPG.y;
 
