@@ -25,16 +25,16 @@ double adi3d(double *A, size_t size) {
                 A[idx] = (A[idx - offset_i] + A[idx + offset_i]) / 2.0;
             }
 
-        for (size_t j = 1; j < NY-1; j++)
     for (size_t i = 1; i < NX-1; i++)
+        for (size_t j = 1; j < NY-1; j++)
             for (size_t k = 1; k < NZ-1; k++) {
                 size_t idx = get_index(i, j, k, size);
                 A[idx] = (A[idx - offset_j] + A[idx + offset_j]) / 2.0;
             }
 
-            for (size_t k = 1; k < NZ-1; k++)
     for (size_t i = 1; i < NX-1; i++)
         for (size_t j = 1; j < NY-1; j++)
+            for (size_t k = 1; k < NZ-1; k++)
             {
                 size_t idx = get_index(i, j, k, size);
                 double tmp1 = (A[idx - offset_k] + A[idx + offset_k]) / 2.0;

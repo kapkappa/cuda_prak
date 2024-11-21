@@ -20,8 +20,8 @@ __device__ __forceinline__ void warp_reduce_max(size_t i, volatile double* data)
 
 __global__ void update1(double * A, size_t NX, size_t NY, size_t NZ, size_t idx) {
 
-    const size_t idz = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
+    const size_t idy = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
+    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // Y-axis thread id
 
     if (idy == 0 || idy >= NX-1 || idz == 0 || idz >= NY-1) {
         return;
@@ -36,9 +36,9 @@ __global__ void update1(double * A, size_t NX, size_t NY, size_t NZ, size_t idx)
 __global__ void update2(double * A, size_t NX, size_t NY, size_t NZ, size_t idy) {
 
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    const size_t idz = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
+    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // X-axis thread id
 
-    if (idx == 0 || idx >= (NX-1) || idz == 0 || idz >= NZ-1) {
+    if (idx == 0 || idx >= NX-1 || idz == 0 || idz >= NZ-1) {
         return;
     }
 
