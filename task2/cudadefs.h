@@ -12,7 +12,7 @@
 #define Z_BLOCKSIZE 1
 #endif
 
-#define TOTAL_BLOCKSIZE (X_BLOCKSIZE * Y_BLOCKSIZE * Z_BLOCKSIZE)
+#define TOTAL_BLOCKSIZE (X_BLOCKSIZE * Y_BLOCKSIZE)
 
 
 #define CHECK_CUDA(func)                                                       \

@@ -8,6 +8,44 @@ namespace gpu {
 
 #define Max(a, b) ((a) > (b) ? (a) : (b))
 
+
+__global__ void update_1(double *A, size_t NX, size_t NY, size_t NZ) {
+
+    const size_t block_offset = NX * blockDim.x * blockIdx.x;
+    const size_t thread_offset = NX * threadIdx.x;
+
+    const size_t id = block_offset + thread_offset;
+
+    const size_t i = id / (NX * NY);
+    const size_t j = (id % (NX * NY)) / NX;
+
+    if (i == 0 || i >= NX-1 || j == 0 || j >= NX-1)
+        return;
+
+    for (int i = id + 1; i < id + NX-1; i++)
+        A[i] = (A[i-1] + A[i+1]) / 2.0;
+
+    return;
+}
+
+
+__global__ void update_2(double *A, size_t NX, size_t NY, size_t NZ) {
+
+    const size_t i = blockIdx.y;
+    const size_t k = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i == 0 || i >= NY-1 || k == 0 || k >= NZ-1)
+        return;
+
+    const size_t id = i * NX * NY + k;
+
+    for (int i = id + NX; i < id + NX * (NX-1); i+=NX)
+        A[i] = (A[i + NX] + A[i - NX]) / 2.0;
+
+    return;
+}
+
+
 template <uint32_t BLOCKSIZE>
 __device__ __forceinline__ void warp_reduce_max(size_t i, volatile double* data) {
     if (BLOCKSIZE >= 64) { data[i] = Max(data[i], data[i + 32]); }
@@ -16,36 +54,6 @@ __device__ __forceinline__ void warp_reduce_max(size_t i, volatile double* data)
     if (BLOCKSIZE >=  8) { data[i] = Max(data[i], data[i +  4]); }
     if (BLOCKSIZE >=  4) { data[i] = Max(data[i], data[i +  2]); }
     if (BLOCKSIZE >=  2) { data[i] = Max(data[i], data[i +  1]); }
-}
-
-__global__ void update1(double * A, size_t NX, size_t NY, size_t NZ, size_t idx) {
-
-    const size_t idy = blockIdx.x * blockDim.x + threadIdx.x; // Y-axis thread id
-    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // Z-axis thread id
-
-    if (idy == 0 || idy >= NX-1 || idz == 0 || idz >= NY-1) {
-        return;
-    }
-
-    const size_t id = idx + idy * NX + idz * NX * NY;
-    A[id] = (A[id + 1] + A[id - 1]) / 2.0;
-
-    return;
-}
-
-__global__ void update2(double * A, size_t NX, size_t NY, size_t NZ, size_t idy) {
-
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x; // X-axis thread id
-    const size_t idz = blockIdx.y * blockDim.y + threadIdx.y; // Z-axis thread id
-
-    if (idx == 0 || idx >= NX-1 || idz == 0 || idz >= NZ-1) {
-        return;
-    }
-
-    const size_t id = idx + idy * NX + idz * NX * NY;
-    A[id] = (A[id + NX] + A[id - NX]) / 2.0;
-
-    return;
 }
 
 template <uint32_t BLOCKSIZE>
@@ -90,15 +98,13 @@ __global__ void get_eps(double * A, size_t NX, size_t NY, size_t NZ, double *eps
 
 double update_wrapper(double *A, size_t NX, size_t NY, size_t NZ, dim3 BPG, dim3 TPB, double * eps_out) {
 
-    // 3.63 sec
-    for (int i = 1; i < NX-1; i++) {
-        update1<<<BPG, TPB>>>(A, NX, NY, NZ, i);
-    }
+    int threads = 8;
+    int blocks = (NX*NY-1) / threads + 1;
+    update_1<<<blocks, threads>>>(A, NX, NY, NZ);
 
-    // 0.33 sec
-    for (int j = 1; j < NY-1; j++) {
-        update2<<<BPG, TPB>>>(A, NX, NY, NZ, j);
-    }
+    int threads_2 = 64;
+    dim3 blocks_2 = dim3((NX - 1) / threads_2 + 1, NY);
+    update_2<<<blocks_2, threads_2>>>(A, NX, NY, NZ);
 
     double eps = 0.0;
 
