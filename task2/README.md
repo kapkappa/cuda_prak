@@ -9,7 +9,7 @@ The actual memory bus bandwidth for the CPU is 43 GB/s, and for the GPU is 417 G
 
 | Size (side/Mb)  | CPU      | GPU       | speedup   |
 |     :-----:     | :----:   | :----:    | :----:    |
-|  384 / 391.5 Mb | 15.27    | 5.787     | 2.64      |
+|  384 / 391.5 Mb | 15.27    | 0.923     | 16.5      |
 
 ## Polus node
 2x 10-cores IBM POWER8s, NVIDIA Tesla P100 GPU (16 Gb)

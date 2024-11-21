@@ -71,12 +71,9 @@ int main(int argc, char **argv) {
     CHECK_CUDA( cudaMalloc((void**)&d_A, NX * NY * NZ * sizeof(double)) )
     CHECK_CUDA( cudaMemcpy(d_A, h_A, sizeof(double) * NX * NY * NZ, cudaMemcpyHostToDevice) )
 
-    dim3 threads_per_block = dim3(X_BLOCKSIZE, Y_BLOCKSIZE);
-    dim3 blocks_per_grid = dim3((NY-1) / X_BLOCKSIZE + 1, (NZ-1) / Y_BLOCKSIZE + 1);
-    uint32_t grid_size = blocks_per_grid.x * blocks_per_grid.y;
-
     double *eps_out;
-    CHECK_CUDA( cudaMalloc((void**)&eps_out, grid_size * sizeof(double)) )
+    uint32_t blocks = (NX*NY-1) / Z_BLOCKSIZE + 1;
+    CHECK_CUDA( cudaMalloc((void**)&eps_out, blocks * sizeof(double)) )
 
     // TODO: Add some warmup iters
     int it = 0;
@@ -101,7 +98,7 @@ int main(int argc, char **argv) {
         t1 = timer();
 
         for (it = 0; it < iters; it++) {
-            eps = gpu::update_wrapper(d_A, NX, NY, NZ, blocks_per_grid, threads_per_block, eps_out);
+            eps = gpu::update_wrapper(d_A, NX, NY, NZ, eps_out);
 
 //            printf(" IT = %4i   EPS = %14.7E\n", it, eps);
 //            if (eps < max_eps)
