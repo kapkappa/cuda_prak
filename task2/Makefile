@@ -3,7 +3,7 @@ CUDA_DIR = /usr/local/cuda
 CUDA_COMPILER = $(CUDA_DIR)/bin/nvcc
 
 CXXFLAGS = -O3 -w -Wall -Wextra -g -ffast-math -funroll-loops -ftree-vectorize $(BS)
-CUDA_FLAGS = $(addprefix -Xcompiler ,$(CXXFLAGS)) #-arch=native #-arch=sm_86
+CUDA_FLAGS = $(addprefix -Xcompiler ,$(CXXFLAGS)) -arch=native #-arch=sm_86
 
 INCLUDE_PATH = -I /usr/local/cuda/include
 LIBRARY_PATH = -L $(CUDA_DIR)/lib -L $(CUDA_DIR)/lib64

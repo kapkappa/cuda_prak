@@ -90,26 +90,26 @@ __global__ void get_eps(double * A, size_t NX, size_t NY, size_t NZ, double *eps
 
 double update_wrapper(double *A, size_t NX, size_t NY, size_t NZ, dim3 BPG, dim3 TPB, double * eps_out) {
 
-    // 3.67 sec
+    // 3.63 sec
     for (int i = 1; i < NX-1; i++) {
         update1<<<BPG, TPB>>>(A, NX, NY, NZ, i);
     }
 
-    // 0.34 sec
+    // 0.33 sec
     for (int j = 1; j < NY-1; j++) {
         update2<<<BPG, TPB>>>(A, NX, NY, NZ, j);
     }
 
-    double eps = 0.0;
+    double eps = 1.0;
+
     uint32_t grid_size = BPG.x * BPG.y;
 
     thrust::device_ptr<double> eps_ptr = thrust::device_pointer_cast(eps_out);
 
-    // 2.08 sec
     for (int k = 1; k < NZ-1; k++) {
-        get_eps<TOTAL_BLOCKSIZE><<<BPG, TPB>>>(A, NX, NY, NZ, eps_out, k);
+        get_eps<TOTAL_BLOCKSIZE><<<BPG, TPB>>>(A, NX, NY, NZ, eps_out, k);  // 0.45
 
-        double local_eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));
+        double local_eps = *(thrust::max_element(eps_ptr, eps_ptr + grid_size));    // 1.35
 
         eps = Max(eps, local_eps);
     }
