@@ -16,5 +16,5 @@ The actual memory bus bandwidth for the CPU is 43 GB/s, and for the GPU is 417 G
 
 | Size (side/Mb)  | CPU      | GPU      | speedup   |
 |     :----:      | :----:   | :----:   | :----:    |
-|  384 / 391.5 Mb | 25.79    | 8.285    | 3.11      |
+|  384 / 391.5 Mb | 25.79    | 1.146    | 22.5      |
 
